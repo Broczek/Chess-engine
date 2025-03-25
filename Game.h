@@ -3,6 +3,10 @@
 #include "Zobrist.h"
 #include <unordered_map>
 #include <cstdint>
+#include <fstream>
+#include <vector>
+#include <string>
+#include <ctime>
 
 class ChessPiece;
 
@@ -29,13 +33,21 @@ private:
     bool isThreefoldRepetition() const;
     bool canCastle(ChessPiece* king, ChessPiece* rook, bool kingside);
     bool isInsufficientMaterial() const;
+    bool playerIsWhite = true;
 
     void draw();
+    void chooseSide();
     void moveFigure(ChessPiece* ChessPiece);
     void updatePositionHistory();
     void performCastle(ChessPiece* king, bool kingside);
     void handlePawnPromotion(int x, int y, bool isWhite);
+    void startLogging();
+    void logMove(const std::string& move);
+    void saveGameResult(const std::string& result);
 
+    std::ofstream gameLog;
+    std::vector<std::string> moveHistory;
+    std::string getAlgebraicNotation(ChessPiece* piece, int toX, int toY, bool capture);
     uint64_t computeZobristHash() const;
 
     int lastDoublePawnX = -1;
