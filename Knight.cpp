@@ -13,3 +13,5 @@ bool Knight::canMove(int newX, int newY, const Board& board) const {
 std::string Knight::getSymbol() const { 
     return white ? "♞" : "♘"; 
 }
+
+int Knight::getTypeIndex() const { return 4; }

@@ -25,3 +25,4 @@ std::string Bishop::getSymbol() const {
     return white ? "♝" : "♗"; 
 }
 
+int Bishop::getTypeIndex() const { return 3; }

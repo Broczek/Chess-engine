@@ -15,15 +15,17 @@ public:
     virtual ~ChessPiece() = default;
 
     virtual bool canMove(int newX, int newY, const Board& board) const = 0;
-    virtual std::string getSymbol() const = 0;
 
     bool rusz(int newX, int newY, const Board& board);
-
-    bool isWhite() const;
-    void setPosition(int x, int y);
     bool hasMoved() const;
+    bool isWhite() const;
+    
+    void setPosition(int x, int y);
     void setMoved(bool moved);
 
     int getX() const;
     int getY() const;
+
+    virtual int getTypeIndex() const = 0;
+    virtual std::string getSymbol() const = 0;
 };

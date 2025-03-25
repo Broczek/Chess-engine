@@ -13,3 +13,5 @@ bool King::canMove(int newX, int newY, const Board& board) const {
 std::string King::getSymbol() const { 
     return white ? "♚" : "♔"; 
 }
+
+int King::getTypeIndex() const { return 0; }

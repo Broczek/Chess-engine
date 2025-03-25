@@ -22,3 +22,5 @@ bool Queen::canMove(int newX, int newY, const Board& board) const {
 std::string Queen::getSymbol() const { 
     return white ? "♛" : "♕"; 
 }
+
+int Queen::getTypeIndex() const { return 1; }
