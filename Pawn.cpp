@@ -21,3 +21,5 @@ bool Pawn::canMove(int newX, int newY, const Board& board) const {
 std::string Pawn::getSymbol() const { 
     return white ? "♟" : "♙"; 
 }
+
+int Pawn::getTypeIndex() const { return 5; }

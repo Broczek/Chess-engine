@@ -20,3 +20,5 @@ bool Rook::canMove(int newX, int newY, const Board& board) const {
 std::string Rook::getSymbol() const { 
     return white ? "♜" : "♖"; 
 }
+
+int Rook::getTypeIndex() const { return 2; }
