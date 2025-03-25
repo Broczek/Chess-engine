@@ -19,8 +19,15 @@ Game::~Game() {}
 void Game::initialize() {
     Operations::clearScreen();
     Operations::hideCursor();
+
+    whiteTurn = true;
+    halfmoveClock = 0;
+    lastDoublePawnX = -1;
+    lastDoublePawnY = -1;
+    positionHistory.clear();
     board.setupBoard();
 }
+
 
 void Game::draw() {
     board.drawBoard();
@@ -164,6 +171,10 @@ void Game::moveFigure(ChessPiece* chessPiece) {
                         }
                     }
 
+                    bool isCapture = (captured != nullptr || isEnPassant);
+                    std::string notation = getAlgebraicNotation(chessPiece, targetX, targetY, isCapture);
+                    logMove(notation);
+
                     whiteTurn = !whiteTurn;
                     return;
                 }
@@ -208,68 +219,81 @@ bool Game::isCheckmate(bool white) {
 }
 
 void Game::run() {
-    initialize();
-    updatePositionHistory();
-
     while (true) {
-        if (isCheckmate(whiteTurn)) {
-            draw();
-            Operations::gotoxy(0, 10);
-            Operations::setTextColor(12);
-            std::cout << "Checkmate! " << (!whiteTurn ? "White" : "Black") << " wins!";
-            _getch();
-            break;
-        }
-
-        if (isStalemate(whiteTurn)) {
-            draw();
-            Operations::gotoxy(0, 10);
-            Operations::setTextColor(14);
-            std::cout << "Stalemate! It's a draw.";
-            _getch();
-            break;
-        }
-
-        if (isThreefoldRepetition()) {
-            draw();
-            Operations::gotoxy(0, 10);
-            Operations::setTextColor(14);
-            std::cout << "Threefold repetition! It's a draw.";
-            _getch();
-            break;
-        }
-
-        if (isInsufficientMaterial()) {
-            draw();
-            Operations::gotoxy(0, 10);
-            Operations::setTextColor(14);
-            std::cout << "Draw! Insufficient mating material.";
-            _getch();
-            break;
-        }
-
-        if (halfmoveClock >= 100) {
-            draw();
-            Operations::gotoxy(0, 10);
-            Operations::setTextColor(14);
-            std::cout << "Draw! 50-move rule: no pawn moves or captures in last 50 moves.";
-            _getch();
-            break;
-        }
-        
-        ChessPiece* selected = selectFigure();
-        moveFigure(selected);
+        chooseSide();
+        initialize();
         updatePositionHistory();
+        moveHistory.clear();
+        startLogging();
 
-        if (isCheck(!whiteTurn)) {
-            draw();
-            Operations::gotoxy(0, 10);
-            Operations::setTextColor(12);
-            std::cout << (!whiteTurn ? "White" : "Black") << " is in check!";
-            _getch();
+        while (true) {
+            if (isCheckmate(whiteTurn)) {
+                draw();
+                Operations::gotoxy(0, 10);
+                Operations::setTextColor(12);
+                std::cout << "Checkmate! " << (!whiteTurn ? "White" : "Black") << " wins!";
+                saveGameResult(whiteTurn ? "0-1" : "1-0");
+                break;
+            }
+
+            if (isStalemate(whiteTurn)) {
+                draw();
+                Operations::gotoxy(0, 10);
+                Operations::setTextColor(14);
+                std::cout << "Stalemate! It's a draw.";
+                saveGameResult("1/2-1/2");
+                break;
+            }
+
+            if (isThreefoldRepetition()) {
+                draw();
+                Operations::gotoxy(0, 10);
+                Operations::setTextColor(14);
+                std::cout << "Threefold repetition! It's a draw.";
+                saveGameResult("1/2-1/2");
+                break;
+            }
+
+            if (isInsufficientMaterial()) {
+                draw();
+                Operations::gotoxy(0, 10);
+                Operations::setTextColor(14);
+                std::cout << "Draw! Insufficient mating material.";
+                saveGameResult("1/2-1/2");
+                break;
+            }
+
+            if (halfmoveClock >= 100) {
+                draw();
+                Operations::gotoxy(0, 10);
+                Operations::setTextColor(14);
+                std::cout << "Draw! 50-move rule: no pawn moves or captures.";
+                saveGameResult("1/2-1/2");
+                break;
+            }
+
+            ChessPiece* selected = selectFigure();
+            moveFigure(selected);
+            updatePositionHistory();
+
+            if (isCheck(!whiteTurn)) {
+                draw();
+                Operations::gotoxy(0, 10);
+                Operations::setTextColor(12);
+                std::cout << (!whiteTurn ? "White" : "Black") << " is in check!";
+                _getch();
+            }
         }
+
+        Operations::gotoxy(0, 12);
+        Operations::setTextColor(11);
+        std::cout << "Play again? (y/n): ";
+
+        char again = _getch();
+        if (again != 'y' && again != 'Y') break;
     }
 }
+
 
 bool Game::canCastle(ChessPiece* king, ChessPiece* rook, bool kingside) {
     if (!king || !rook) return false;
@@ -451,4 +475,103 @@ void Game::handlePawnPromotion(int x, int y, bool isWhite) {
     }
 }
 
+void Game::chooseSide() {
+    while (true) {
+        Operations::clearScreen();
+        Operations::setTextColor(11);
+        std::cout << "Choose your side:\n";
+        std::cout << "  [w] White (♙)\n";
+        std::cout << "  [b] Black (♟)\n";
+        std::cout << "Your choice: ";
 
+        char input = _getch();
+        if (input == 'w' || input == 'W') {
+            playerIsWhite = true;
+            return;
+        }
+        else if (input == 'b' || input == 'B') {
+            playerIsWhite = false;
+            return;
+        }
+        else {
+            std::cout << "\nInvalid input. Press 'w' or 'b'.";
+            _getch();
+        }
+    }
+}
+
+void Game::startLogging() {
+    time_t now = time(nullptr);
+    tm* local = localtime(&now);
+    char filename[64];
+    strftime(filename, sizeof(filename), "game_%Y%m%d_%H%M%S.txt", local);
+
+    gameLog.open(filename);
+
+    char dateTime[64];
+    strftime(dateTime, sizeof(dateTime), "%Y-%m-%d %H:%M:%S", local);
+
+    gameLog << "Date: " << dateTime << "\n";
+    gameLog << "White: " << (playerIsWhite ? "Player" : "Computer") << "\n";
+    gameLog << "Black: " << (playerIsWhite ? "Computer" : "Player") << "\n";
+}
+
+void Game::logMove(const std::string& move) {
+    moveHistory.push_back(move);
+}
+
+void Game::saveGameResult(const std::string& result) {
+    if (!gameLog.is_open()) return;
+
+    std::string resultText;
+    if (result == "1-0")
+        resultText = (playerIsWhite ? "Player win" : "Computer win");
+    else if (result == "0-1")
+        resultText = (playerIsWhite ? "Computer win" : "Player win");
+    else
+        resultText = "Tie";
+
+    gameLog << "Result: " << resultText << "\n\n";
+
+    for (size_t i = 0; i < moveHistory.size(); ++i) {
+        if (i % 2 == 0)
+            gameLog << (i / 2 + 1) << ".";
+        gameLog << moveHistory[i] << " ";
+    }
+
+    gameLog << "\n";
+    gameLog.close();
+}
+
+std::string Game::getAlgebraicNotation(ChessPiece* piece, int toX, int toY, bool capture) {
+    std::string notation;
+    char files[] = "abcdefgh";
+    char ranks[] = "87654321";
+
+    int type = piece->getTypeIndex();
+    if (type != 5) {
+        switch (type) {
+            case 0: notation += "K"; break;
+            case 1: notation += "Q"; break;
+            case 2: notation += "R"; break;
+            case 3: notation += "B"; break;
+            case 4: notation += "N"; break;
+        }
+    } else if (capture) {
+        notation += files[piece->getX()];
+    }
+
+    if (capture)
+        notation += "x";
+
+    notation += files[toX];
+    notation += ranks[toY];
+
+    if (isCheckmate(!piece->isWhite())) {
+        notation += "#";
+    } else if (isCheck(!piece->isWhite())) {
+        notation += "+";
+    }
+
+    return notation;
+}
