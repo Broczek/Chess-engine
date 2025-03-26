@@ -10,7 +10,16 @@
 #include <conio.h>
 #include <iostream>
 #include <vector>
+#include <algorithm>
 
+constexpr int pieceValues[] = {
+    20000, // King
+    900,   // Queen
+    500,   // Rook
+    330,   // Bishop
+    320,   // Knight
+    100    // Pawn
+};
 
 Game::Game() : cursorX(0), cursorY(0), whiteTurn(true) { Zobrist::init(); }
 
@@ -26,6 +35,7 @@ void Game::initialize() {
     lastDoublePawnY = -1;
     positionHistory.clear();
     board.setupBoard();
+    transpositionTable.clear();
 }
 
 
@@ -272,10 +282,17 @@ void Game::run() {
                 break;
             }
 
-            ChessPiece* selected = selectFigure();
-            moveFigure(selected);
-            updatePositionHistory();
-
+            if ((whiteTurn && playerIsWhite) || (!whiteTurn && !playerIsWhite)) {
+                ChessPiece* selected = selectFigure();
+                moveFigure(selected);
+                draw();
+                updatePositionHistory();
+            } else {
+                draw();
+                makeComputerMove();
+                updatePositionHistory();
+            }            
+            
             if (isCheck(!whiteTurn)) {
                 draw();
                 Operations::gotoxy(0, 10);
@@ -574,4 +591,300 @@ std::string Game::getAlgebraicNotation(ChessPiece* piece, int toX, int toY, bool
     }
 
     return notation;
+}
+
+void Game::makeComputerMove() {
+    Move move = getBestMove(3);
+
+    ChessPiece* piece = move.movedPiece;
+    if (!piece) return;
+
+    board.moveChessPiece(move.fromX, move.fromY, move.toX, move.toY);
+    piece->setMoved(true);
+
+    if (dynamic_cast<Pawn*>(piece)) {
+        if ((piece->isWhite() && move.toY == 0) || (!piece->isWhite() && move.toY == 7)) {
+            handlePawnPromotion(move.toX, move.toY, piece->isWhite());
+        }
+
+        if (abs(move.toY - move.fromY) == 2) {
+            lastDoublePawnX = move.toX;
+            lastDoublePawnY = move.toY;
+        } else {
+            lastDoublePawnX = -1;
+            lastDoublePawnY = -1;
+        }
+    } else {
+        lastDoublePawnX = -1;
+        lastDoublePawnY = -1;
+    }
+
+    if (dynamic_cast<Pawn*>(piece) || move.capturedPiece)
+        halfmoveClock = 0;
+    else
+        halfmoveClock++;
+
+    bool isCapture = (move.capturedPiece != nullptr);
+    std::string notation = getAlgebraicNotation(piece, move.toX, move.toY, isCapture);
+    logMove(notation);
+
+    whiteTurn = !whiteTurn;
+}
+
+
+int Game::evaluatePosition(const Board& board) const {
+    int score = 0;
+    int mobilityScore = 0;
+    int developmentScore = 0;
+    int centerControl = 0;
+    int kingSafetyScore = 0;
+
+    const std::vector<std::pair<int, int>> centralSquares = {
+        {3, 3}, {3, 4}, {4, 3}, {4, 4}
+    };
+
+    for (int y = 0; y < 8; ++y) {
+        for (int x = 0; x < 8; ++x) {
+            ChessPiece* piece = board.getChessPiece(x, y);
+            if (!piece) continue;
+
+            int type = piece->getTypeIndex();
+            int value = pieceValues[type];
+
+            bool isComputer = piece->isWhite() == !playerIsWhite;
+            score += isComputer ? value : -value;
+
+            int legalMoves = 0;
+            for (int ty = 0; ty < 8; ++ty) {
+                for (int tx = 0; tx < 8; ++tx) {
+                    if (piece->canMove(tx, ty, board)) {
+                        legalMoves++;
+
+                        for (auto& sq : centralSquares) {
+                            if (tx == sq.first && ty == sq.second) {
+                                centerControl += isComputer ? +15 : -15;
+                            }
+                        }
+                    }
+                }
+            }
+
+            mobilityScore += (isComputer ? +1 : -1) * legalMoves * 2;
+
+            if ((type == 3 || type == 4) && !piece->hasMoved()) {
+                developmentScore += isComputer ? -15 : +15;
+            }
+        }
+    }
+
+    for (int y = 0; y < 8; ++y) {
+        for (int x = 0; x < 8; ++x) {
+            ChessPiece* piece = board.getChessPiece(x, y);
+            if (!piece || piece->getTypeIndex() != 0) continue;
+
+            bool isComputer = piece->isWhite() == !playerIsWhite;
+            int direction = piece->isWhite() ? -1 : 1;
+
+            for (int dx = -1; dx <= 1; ++dx) {
+                int px = piece->getX() + dx;
+                int py = piece->getY() + direction;
+
+                if (px < 0 || px > 7 || py < 0 || py > 7) continue;
+
+                ChessPiece* front = board.getChessPiece(px, py);
+                if (front && front->getTypeIndex() == 5 && front->isWhite() == piece->isWhite()) {
+                    kingSafetyScore += isComputer ? +10 : -10;
+                } else {
+                    kingSafetyScore += isComputer ? -8 : +8;
+                }
+            }
+        }
+    }
+
+    return score + mobilityScore + developmentScore + centerControl + kingSafetyScore;
+}
+
+int Game::minimax(Board& board, int depth, int alpha, int beta, bool maximizingPlayer, bool isRoot) {
+    if (!isRoot) {
+        auto now = std::chrono::steady_clock::now();
+        int elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - searchStartTime).count();
+    
+        if (elapsed >= timeLimitMillis) {
+            timeUp = true;
+            return evaluatePosition(board);
+        }
+    }    
+
+    uint64_t hash = computeZobristHash();
+    if (transpositionTable.count(hash)) {
+        return transpositionTable[hash];
+    }
+
+    if (depth == 0) {
+        int eval = evaluatePosition(board);
+        transpositionTable[hash] = eval;
+        return eval;
+    }
+
+    int bestEval = maximizingPlayer ? -100000 : 100000;
+    std::vector<Move> moves = generateSortedMoves(maximizingPlayer == !playerIsWhite);
+
+    for (const Move& move : moves) {
+        ChessPiece* piece = move.movedPiece;
+        ChessPiece* captured = move.capturedPiece;
+
+        board.moveChessPiece(move.fromX, move.fromY, move.toX, move.toY);
+
+        if (isCheck(piece->isWhite())) {
+            board.moveChessPiece(move.toX, move.toY, move.fromX, move.fromY);
+            board.board[move.toY][move.toX] = captured;
+            if (captured) captured->setPosition(move.toX, move.toY);
+            continue;
+        }
+
+        if (isCheckmate(!piece->isWhite())) {
+            int mateScore = maximizingPlayer
+                ? 100000 - (maxSearchDepth - depth)
+                : -100000 + (maxSearchDepth - depth);
+            board.moveChessPiece(move.toX, move.toY, move.fromX, move.fromY);
+            board.board[move.toY][move.toX] = captured;
+            if (captured) captured->setPosition(move.toX, move.toY);
+            transpositionTable[hash] = mateScore;
+            return mateScore;
+        }
+
+        int bonus = 0;
+        if (isCheck(!piece->isWhite())) bonus = 1;
+        if (captured) bonus = std::max(bonus, 1);
+        int nextDepth = std::min(depth - 1 + bonus, maxSearchDepth);
+
+        int eval = minimax(board, nextDepth, alpha, beta, !maximizingPlayer, false);
+
+        board.moveChessPiece(move.toX, move.toY, move.fromX, move.fromY);
+        board.board[move.toY][move.toX] = captured;
+        if (captured) captured->setPosition(move.toX, move.toY);
+
+        if (maximizingPlayer) {
+            bestEval = std::max(bestEval, eval);
+            alpha = std::max(alpha, eval);
+        } else {
+            bestEval = std::min(bestEval, eval);
+            beta = std::min(beta, eval);
+        }
+
+        if (beta <= alpha)
+            break;
+    }
+
+    transpositionTable[hash] = bestEval;
+    return bestEval;
+}
+
+Move Game::getBestMove(int depth) {
+    int bestEval = -100000;
+    Move bestMove;
+
+    searchStartTime = std::chrono::steady_clock::now();
+    timeUp = false;
+
+    std::vector<Move> moves = generateSortedMoves(!playerIsWhite);
+
+    for (const Move& move : moves) {
+        if (timeUp) break;
+
+        ChessPiece* piece = move.movedPiece;
+        ChessPiece* captured = move.capturedPiece;
+
+        board.moveChessPiece(move.fromX, move.fromY, move.toX, move.toY);
+
+        if (isCheck(piece->isWhite())) {
+            board.moveChessPiece(move.toX, move.toY, move.fromX, move.fromY);
+            board.board[move.toY][move.toX] = captured;
+            if (captured) captured->setPosition(move.toX, move.toY);
+            continue;
+        }
+
+        int eval = minimax(board, depth - 1, -100000, 100000, false, true);
+
+        board.moveChessPiece(move.toX, move.toY, move.fromX, move.fromY);
+        board.board[move.toY][move.toX] = captured;
+        if (captured) captured->setPosition(move.toX, move.toY);
+
+        if (eval > bestEval) {
+            bestEval = eval;
+            bestMove = move;
+        }
+    }
+
+    if (bestMove.movedPiece) {
+        std::string symbol = bestMove.movedPiece->getSymbol();
+        std::string name = symbol == "♛" || symbol == "♕" ? "Q" :
+                           symbol == "♜" || symbol == "♖" ? "R" :
+                           symbol == "♝" || symbol == "♗" ? "B" :
+                           symbol == "♞" || symbol == "♘" ? "N" :
+                           symbol == "♚" || symbol == "♔" ? "K" :
+                           "";
+
+        char files[] = "abcdefgh";
+        char ranks[] = "87654321";
+
+        std::string from = std::string(1, files[bestMove.fromX]) + ranks[bestMove.fromY];
+        std::string to   = std::string(1, files[bestMove.toX]) + ranks[bestMove.toY];
+
+        int displayedEval = bestEval;
+        if (!playerIsWhite) displayedEval *= -1;
+
+        int elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now() - searchStartTime
+                      ).count();
+
+        Operations::gotoxy(0, 11);
+        Operations::setTextColor(10);
+        std::cout << "Computer chose: " << name << from << " → " << to
+                  << " | Eval: " << (displayedEval > 0 ? "+" : "") << displayedEval
+                  << " | Time: " << elapsed / 1000.0 << "s";
+    }
+
+    return bestMove;
+}
+
+std::vector<Move> Game::generateSortedMoves(bool forComputer) {
+    std::vector<Move> moves;
+
+    for (int y = 0; y < 8; ++y) {
+        for (int x = 0; x < 8; ++x) {
+            ChessPiece* piece = board.getChessPiece(x, y);
+            if (!piece || piece->isWhite() != forComputer) continue;
+
+            for (int ty = 0; ty < 8; ++ty) {
+                for (int tx = 0; tx < 8; ++tx) {
+                    if (!piece->canMove(tx, ty, board)) continue;
+
+                    ChessPiece* captured = board.getChessPiece(tx, ty);
+                    moves.push_back({ x, y, tx, ty, piece, captured });
+                }
+            }
+        }
+    }
+
+    std::sort(moves.begin(), moves.end(), [&](const Move& a, const Move& b) {
+        int scoreA = 0;
+        int scoreB = 0;
+    
+        if (a.capturedPiece) {
+            int victim = pieceValues[a.capturedPiece->getTypeIndex()];
+            int attacker = pieceValues[a.movedPiece->getTypeIndex()];
+            scoreA = 10 * victim - attacker;
+        }
+    
+        if (b.capturedPiece) {
+            int victim = pieceValues[b.capturedPiece->getTypeIndex()];
+            int attacker = pieceValues[b.movedPiece->getTypeIndex()];
+            scoreB = 10 * victim - attacker;
+        }
+    
+        return scoreA > scoreB;
+    });
+    
+    return moves;
 }
